@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SafeChat - הורים</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="login" class="login hidden">
+    <h1>פאנל הורים</h1>
+    <p>סיסמת הורה</p>
+    <form id="loginForm">
+      <input id="pw" type="password" autocomplete="current-password" autofocus>
+      <button type="submit">כניסה</button>
+    </form>
+    <div id="loginError" class="error"></div>
+  </div>
+
+  <div id="panel" class="hidden">
+    <div class="topbar"><h2>SafeChat · פאנל הורים</h2><button id="logoutBtn">יציאה</button></div>
+    <div class="admin">
+      <div class="card">
+        <h3>חיבור לוואטסאפ</h3>
+        <div id="status"></div>
+        <div id="qrBox" class="qr hidden">
+          <p class="hint">בטלפון שבו מותקן הוואטסאפ של הילד: הגדרות ← מכשירים מקושרים ← קישור מכשיר, וסרקו את הקוד:</p>
+          <img id="qr" alt="QR">
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="danger" id="unlinkBtn">ניתוק המכשיר המקושר</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>אנשי קשר מאושרים</h3>
+        <form class="row" id="contactForm">
+          <input id="cName" placeholder="שם (למשל: אמא)">
+          <input id="cPhone" placeholder="טלפון (054-1234567)" dir="ltr">
+          <button type="submit">הוספה</button>
+        </form>
+        <div id="contacts"></div>
+      </div>
+
+      <div class="card">
+        <h3>קבוצות מאושרות</h3>
+        <div id="groups"></div>
+        <h4>כל הקבוצות של החשבון</h4>
+        <p class="hint">לחצו "אישור" כדי שהקבוצה תופיע לילד.</p>
+        <button class="secondary" id="loadGroupsBtn">טעינת רשימת קבוצות</button>
+        <div id="allGroups"></div>
+      </div>
+
+      <div class="card">
+        <h3>הודעות שנחסמו לאחרונה</h3>
+        <p class="hint">צ'אטים שניסו לשלוח הודעה ולא הוצגו לילד. התוכן לא נשמר.</p>
+        <button class="secondary" id="loadBlockedBtn">רענון</button>
+        <div id="blocked"></div>
+      </div>
+
+      <div class="card">
+        <h3>סיסמאות</h3>
+        <form class="row" id="pwForm">
+          <input id="newParent" type="password" placeholder="סיסמת הורה חדשה (6+ תווים)">
+          <input id="newPin" type="password" inputmode="numeric" placeholder="קוד ילד חדש (4+ ספרות)">
+          <button type="submit">שמירה</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="common.js"></script>
+  <script src="admin.js"></script>
+</body>
+</html>
