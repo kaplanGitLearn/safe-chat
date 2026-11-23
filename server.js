@@ -55,13 +55,39 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(ha, hb);
 }
 
+// Brute-force protection: after too many wrong passwords, lock that address (and, as a
+// backstop against many addresses, the whole role) for a while.
+const LOCK_MS = 15 * 60 * 1000;
+const failures = new Map(); // key -> { count, until }
+function isLocked(key) {
+  const f = failures.get(key);
+  return f && f.until > Date.now();
+}
+function recordFailure(key, max) {
+  const f = failures.get(key) || { count: 0, until: 0 };
+  if (f.until && f.until <= Date.now()) { f.count = 0; f.until = 0; }
+  f.count++;
+  if (f.count >= max) f.until = Date.now() + LOCK_MS;
+  failures.set(key, f);
+}
+
+app.set('trust proxy', 'loopback'); // real client IP when running behind Caddy
+
 app.post('/api/login', (req, res) => {
   const { role, password } = req.body || {};
+  const ipKey = `ip:${req.ip}`;
+  const roleKey = `role:${role}`;
+  if (isLocked(ipKey) || isLocked(roleKey)) {
+    return res.status(429).json({ error: 'יותר מדי ניסיונות. נסה שוב בעוד 15 דקות' });
+  }
   const cfg = store.getConfig();
   const expected = role === 'parent' ? cfg.parentPassword : role === 'child' ? cfg.childPin : null;
   if (!expected || !safeEqual(password || '', expected)) {
+    recordFailure(ipKey, 5);
+    recordFailure(roleKey, 30);
     return res.status(401).json({ error: 'סיסמה שגויה' });
   }
+  failures.delete(ipKey);
   req.session.role = role;
   res.json({ ok: true });
 });

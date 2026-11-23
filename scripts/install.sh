@@ -21,9 +21,9 @@ fi
 [ ${#CHILD_PIN} -ge 4 ] || { echo "קוד הילד קצר מדי"; exit 1; }
 
 # Small servers (1GB RAM) need swap for npm install
-if ! swapon --show | grep -q .; then
+if [ ! -f /swapfile ] && ! sudo /sbin/swapon --show | grep -q .; then
   sudo fallocate -l 1G /swapfile && sudo chmod 600 /swapfile
-  sudo mkswap /swapfile >/dev/null && sudo swapon /swapfile
+  sudo /sbin/mkswap /swapfile >/dev/null && sudo /sbin/swapon /swapfile
   echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
 fi
 
