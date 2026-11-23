@@ -287,7 +287,7 @@ async function connectWhatsApp() {
 
 connectWhatsApp().catch((e) => console.error('[whatsapp] failed to start', e));
 
-server.listen(PORT, () => {
+server.listen(PORT, process.env.HOST || "0.0.0.0", () => {
   const cfg = store.getConfig();
   console.log(`SafeChat running on http://localhost:${PORT}`);
   if (cfg._generated) {

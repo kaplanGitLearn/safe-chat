@@ -27,6 +27,12 @@ npm install
 PARENT_PASSWORD='סיסמה-חזקה' CHILD_PIN=1234 npm start
 ```
 
+התקנה אוטומטית על שרת לינוקס חדש (למשל שרת חינמי ב-Google Cloud). הסקריפט מתקין הכל, כולל HTTPS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kaplanGitLearn/safe-chat/main/scripts/install.sh | bash
+```
+
 או עם Docker:
 
 ```bash
