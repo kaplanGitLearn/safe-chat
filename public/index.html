@@ -3,15 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#2b5d8a">
+  <meta name="theme-color" content="#008069">
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="icons/icon.svg">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
   <title>SafeChat</title>
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="child">
   <div id="login" class="login hidden">
+    <img src="icons/icon-192.png" alt="" class="login-logo">
     <h1>SafeChat</h1>
     <p>הכנס קוד</p>
     <form id="loginForm">
@@ -24,23 +25,37 @@
   <div id="app" class="app hidden">
     <aside class="sidebar">
       <div class="topbar">
-        <h2>צ'אטים</h2>
-        <button id="logoutBtn" title="יציאה">⎋</button>
+        <h2>SafeChat</h2>
+        <button id="logoutBtn" class="icon-btn" title="יציאה" aria-label="יציאה">
+          <svg viewBox="0 0 24 24"><path d="M12 7a2 2 0 1 0-.001-4.001A2 2 0 0 0 12 7zm0 2a2 2 0 1 0 .001 4.001A2 2 0 0 0 12 9zm0 6a2 2 0 1 0 .001 4.001A2 2 0 0 0 12 15z"/></svg>
+        </button>
+      </div>
+      <div id="notifBanner" class="notif-banner hidden">
+        <div class="notif-icon"><svg viewBox="0 0 24 24"><path d="M12 22a2 2 0 0 0 2-2h-4a2 2 0 0 0 2 2zm6-6V11c0-3.07-1.64-5.64-4.5-6.32V4a1.5 1.5 0 0 0-3 0v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg></div>
+        <div class="notif-text"><b>קבלת התראות על הודעות חדשות</b><span>הקש כאן להפעלה</span></div>
       </div>
       <div id="chatList" class="chat-list"></div>
     </aside>
     <main class="conversation">
-      <div id="placeholder" class="placeholder">בחר צ'אט כדי להתחיל</div>
-      <div id="chatView" class="hidden" style="display:flex;flex-direction:column;flex:1;min-height:0">
+      <div id="placeholder" class="placeholder">
+        <img src="icons/icon-192.png" alt="">
+        <h3>SafeChat</h3>
+        <p>בחר צ'אט כדי להתחיל</p>
+      </div>
+      <div id="chatView" class="chat-view hidden">
         <div class="topbar">
-          <button class="back" id="backBtn">→</button>
+          <button class="icon-btn back" id="backBtn" aria-label="חזרה">
+            <svg viewBox="0 0 24 24"><path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/></svg>
+          </button>
           <div class="avatar" id="chatAvatar"></div>
-          <h2 id="chatTitle"></h2>
+          <div class="title-wrap"><h2 id="chatTitle"></h2><small id="chatSubtitle"></small></div>
         </div>
         <div id="messages" class="messages"></div>
         <form id="composer" class="composer">
-          <input id="msgInput" placeholder="הקלד הודעה" autocomplete="off">
-          <button type="submit" title="שלח">➤</button>
+          <div class="input-wrap"><input id="msgInput" placeholder="הודעה" autocomplete="off" dir="auto"></div>
+          <button type="submit" class="send-btn" aria-label="שליחה">
+            <svg viewBox="0 0 24 24"><path d="M1.1 21.8 23 12 1.1 2.2 1 9.8l15.7 2.2L1 14.2z"/></svg>
+          </button>
         </form>
       </div>
     </main>

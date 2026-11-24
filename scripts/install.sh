@@ -86,6 +86,7 @@ echo "$DOMAIN {
 sudo systemctl daemon-reload
 sudo systemctl enable --now safe-chat >/dev/null
 sudo systemctl restart safe-chat caddy
+sudo bash "$APP_DIR/scripts/enable-auto-update.sh" >/dev/null
 
 echo
 echo "== ההתקנה הסתיימה =="

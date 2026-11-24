@@ -20,6 +20,7 @@ const {
   downloadMediaMessage,
 } = require('@whiskeysockets/baileys');
 
+const webpush = require('web-push');
 const store = require('./lib/store');
 const { isAllowed, phoneToJid, describeMessage } = require('./lib/filter');
 
@@ -28,6 +29,9 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const AUTH_DIR = path.join(DATA_DIR, 'auth');
 fs.mkdirSync(AUTH_DIR, { recursive: true });
 store.init(DATA_DIR);
+
+const { vapid } = store.getConfig();
+webpush.setVapidDetails('mailto:safechat@localhost', vapid.publicKey, vapid.privateKey);
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
 
@@ -189,6 +193,39 @@ function allowedChats() {
   }).sort((a, b) => (b.lastMessage?.timestamp || 0) - (a.lastMessage?.timestamp || 0));
 }
 
+// ----- Push notifications -----
+app.get('/api/push/key', requireRole('child'), (req, res) => res.json({ key: store.getConfig().vapid.publicKey }));
+
+app.post('/api/push/subscribe', requireRole('child'), (req, res) => {
+  const sub = req.body;
+  if (!sub?.endpoint || !sub?.keys?.p256dh || !sub?.keys?.auth) return res.status(400).json({ error: 'bad subscription' });
+  store.addSubscription({ endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } });
+  res.json({ ok: true });
+});
+
+const MEDIA_LABELS = {
+  image: '📷 תמונה', video: '🎥 סרטון', audio: '🎤 הודעה קולית', sticker: '🙂 סטיקר',
+  document: '📄 מסמך', location: '📍 מיקום', contact: '👤 איש קשר',
+};
+
+function notifyChild(jid, m) {
+  const cfg = store.getConfig();
+  const chat = [...cfg.allowedContacts, ...cfg.allowedGroups].find((c) => c.jid === jid);
+  const isGroup = jid.endsWith('@g.us');
+  const body = m.type === 'text' ? m.text : [MEDIA_LABELS[m.type], m.text].filter(Boolean).join(' ');
+  const payload = JSON.stringify({
+    title: chat?.name || 'הודעה חדשה',
+    body: isGroup && m.senderName ? `${m.senderName}: ${body}` : body,
+    jid,
+  });
+  for (const sub of cfg.pushSubscriptions || []) {
+    webpush.sendNotification(sub, payload, { TTL: 60 * 60 * 24, urgency: 'high' }).catch((err) => {
+      if (err.statusCode === 404 || err.statusCode === 410) store.removeSubscription(sub.endpoint);
+      else logger.warn({ err: err.message }, 'push failed');
+    });
+  }
+}
+
 app.get('/api/chats', requireRole('child'), (req, res) => res.json(allowedChats()));
 
 app.get('/api/chats/:jid/messages', requireRole('child'), (req, res) => {
@@ -305,6 +342,7 @@ async function connectWhatsApp() {
       if (!m) continue;
       store.addMessage(jid, m, msg);
       io.to('child').emit('message', { jid, message: m });
+      if (!m.fromMe && type === 'notify') notifyChild(jid, m);
       changed = true;
     }
     if (changed) broadcastChats();
