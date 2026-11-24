@@ -139,7 +139,8 @@ async function lookupLid(jid) {
   if (wa.state !== 'open' || !jid.endsWith('@s.whatsapp.net')) return { known: false };
   try {
     const [r] = (await wa.sock.onWhatsApp(jid)) || [];
-    return { known: true, exists: !!r?.exists, lid: r?.lid || null };
+    const lid = await wa.sock.signalRepository.lidMapping.getLIDForPN(jid).catch(() => null);
+    return { known: true, exists: !!r?.exists, lid: lid ? jidNormalizedUser(lid) : null };
   } catch (e) {
     diag(`בדיקת מספר נכשלה: ${e.message}`);
     return { known: false };
@@ -281,11 +282,21 @@ app.post('/api/chats/:jid/messages', requireRole('child'), async (req, res) => {
   const text = String(req.body?.text || '').trim();
   if (!isAllowed(jid, store.getConfig())) return res.status(403).json({ error: 'forbidden' });
   if (!text) return res.status(400).json({ error: 'empty' });
-  if (wa.state !== 'open') return res.status(409).json({ error: 'אין חיבור כרגע' });
+  if (wa.state !== 'open') {
+    diag(`הילד ניסה לשלוח הודעה, אבל אין חיבור לוואטסאפ (מצב: ${wa.state})`);
+    return res.status(409).json({ error: 'אין חיבור לוואטסאפ כרגע' });
+  }
   try {
-    await wa.sock.sendMessage(jid, { text });
+    const sent = await wa.sock.sendMessage(jid, { text });
+    const m = sent && describeMessage(sent);
+    if (m && store.addMessage(jid, m, sent)) {
+      io.to('child').emit('message', { jid, message: m });
+      broadcastChats();
+    }
+    diag(`הילד שלח הודעה אל ${jid.split('@')[0]}`);
     res.json({ ok: true });
   } catch (e) {
+    diag(`שליחת הודעה של הילד נכשלה: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
@@ -365,19 +376,26 @@ async function connectWhatsApp() {
     io.to('parent').emit('status', wa.state);
   });
 
-  sock.ev.on('messages.upsert', ({ messages, type }) => {
+  // WhatsApp tells us which hidden LID belongs to which phone number; remember it for approved contacts.
+  sock.ev.on('lid-mapping.update', (pairs) => {
+    for (const { lid, pn } of [].concat(pairs || [])) rememberLid(lid, pn);
+  });
+
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify' && type !== 'append') return;
     const cfg = store.getConfig();
     let changed = false;
     for (const msg of messages) {
-      const jid = jidNormalizedUser(resolveChatJid(msg.key, cfg));
+      let jid = jidNormalizedUser(resolveChatJid(msg.key, cfg));
+      if (jid.endsWith('@lid')) {
+        const pn = await sock.signalRepository.lidMapping.getPNForLID(jid).catch(() => null);
+        if (pn) { rememberLid(jid, pn); jid = jidNormalizedUser(pn); }
+      }
       if (!jid || jid === 'status@broadcast' || !msg.message) continue;
       // Learn the hidden LID of approved contacts whenever WhatsApp tells us both ids.
-      const lid = msg.key.remoteJid?.endsWith('@lid') ? msg.key.remoteJid : msg.key.senderLid;
-      if (lid && jid.endsWith('@s.whatsapp.net')) {
-        const c = cfg.allowedContacts.find((x) => x.jid === jid);
-        if (c && c.lid !== lid) store.updateConfig(() => { c.lid = lid; });
-      }
+      const alt = msg.key.remoteJidAlt || msg.key.senderLid;
+      if (msg.key.remoteJid?.endsWith('@lid')) rememberLid(msg.key.remoteJid, jid);
+      else if (alt?.endsWith('@lid')) rememberLid(alt, jid);
 
       const who = `${msg.pushName || ''} (${jid.split('@')[0]}${jid.endsWith('@lid') ? ', מזהה פנימי' : ''})`;
       if (!isAllowed(jid, cfg)) {
@@ -390,14 +408,21 @@ async function connectWhatsApp() {
       }
       if (type === 'notify') diag(`${msg.key.fromMe ? 'נשלחה הודעה אל' : 'התקבלה הודעה מ'}-${who}`);
       const m = describeMessage(msg);
-      if (!m) continue;
-      store.addMessage(jid, m, msg);
+      if (!m || !store.addMessage(jid, m, msg)) continue; // skip duplicates (e.g. our own sent messages)
       io.to('child').emit('message', { jid, message: m });
       if (!m.fromMe && type === 'notify') notifyChild(jid, m);
       changed = true;
     }
     if (changed) broadcastChats();
   });
+}
+
+function rememberLid(lid, pn) {
+  if (!lid || !pn || !lid.endsWith('@lid')) return;
+  lid = jidNormalizedUser(lid);
+  pn = jidNormalizedUser(pn);
+  const c = store.getConfig().allowedContacts.find((x) => x.jid === pn);
+  if (c && c.lid !== lid) store.updateConfig(() => { c.lid = lid; });
 }
 
 // Contacts approved before LID support (or while offline) get their LID looked up once connected.
