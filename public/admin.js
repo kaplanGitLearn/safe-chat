@@ -6,7 +6,7 @@ async function start() {
   if (role !== 'parent') { $('login').classList.remove('hidden'); return; }
   $('login').classList.add('hidden');
   $('panel').classList.remove('hidden');
-  await Promise.all([refreshStatus(), refreshConfig(), refreshBlocked()]);
+  await Promise.all([refreshStatus(), refreshConfig(), refreshBlocked(), refreshDiag()]);
   io().on('status', refreshStatus);
   setInterval(refreshStatus, 15000);
 }
@@ -49,9 +49,10 @@ async function removeItem(type, jid) {
   refreshConfig();
 }
 
-async function addContact(phone, name) {
-  await api('/api/admin/contacts', { method: 'POST', body: { phone, name } });
-  await Promise.all([refreshConfig(), refreshBlocked()]);
+async function addContact(phone, name, jid) {
+  const r = await api('/api/admin/contacts', { method: 'POST', body: { phone, name, jid } });
+  if (r.warning) alert(r.warning);
+  await Promise.all([refreshConfig(), refreshBlocked(), refreshDiag()]);
 }
 
 async function addGroup(jid, name) {
@@ -88,10 +89,24 @@ async function refreshBlocked() {
       el('div', {}, label || b.jid.split('@')[0], el('small', {}, `${b.jid.split('@')[0]} · ${b.count} הודעות`)),
       el('button', { class: 'secondary', onclick: () => isGroup
         ? addGroup(b.jid, b.name || b.jid)
-        : addContact('+' + b.jid.split('@')[0], b.name) }, 'אישור'));
+        : addContact(null, b.name, b.jid) }, 'אישור'));
   }) : [el('p', { class: 'hint' }, 'אין')]));
 }
 $('loadBlockedBtn').onclick = refreshBlocked;
+
+async function refreshDiag() {
+  const d = await api('/api/admin/diag');
+  const summary = el('div', { class: 'hint' },
+    `חיבור: ${STATUS_TEXT[d.connection] || d.connection} · טלפונים עם התראות: ${d.subscriptions} · ` +
+    `אנשי קשר: ${d.contacts.map((c) => c.name + (c.hasLid ? ' ✓' : '')).join(', ') || 'אין'}`);
+  const rows = d.log.length
+    ? d.log.map((e) => el('div', { class: 'list-item' },
+        el('span', {}, e.text),
+        el('small', {}, new Date(e.t).toLocaleString('he-IL', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }))))
+    : [el('p', { class: 'hint' }, 'עדיין אין אירועים מאז ההפעלה האחרונה של השרת')];
+  $('diag').replaceChildren(summary, ...rows);
+}
+$('loadDiagBtn').onclick = refreshDiag;
 
 $('pwForm').addEventListener('submit', async (e) => {
   e.preventDefault();

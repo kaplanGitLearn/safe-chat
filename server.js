@@ -22,7 +22,7 @@ const {
 
 const webpush = require('web-push');
 const store = require('./lib/store');
-const { isAllowed, phoneToJid, describeMessage } = require('./lib/filter');
+const { isAllowed, resolveChatJid, phoneToJid, describeMessage } = require('./lib/filter');
 
 const PORT = process.env.PORT || 3000;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -32,6 +32,14 @@ store.init(DATA_DIR);
 
 const { vapid } = store.getConfig();
 webpush.setVapidDetails('mailto:safechat@localhost', vapid.publicKey, vapid.privateKey);
+
+// Recent events, shown in the parent panel so problems can be diagnosed without a terminal.
+const diagLog = [];
+function diag(text) {
+  diagLog.push({ t: Date.now(), text });
+  if (diagLog.length > 80) diagLog.shift();
+  console.log('[diag]', text);
+}
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
 
@@ -126,17 +134,45 @@ app.get('/api/admin/groups', requireRole('parent'), async (req, res) => {
 // Recent chats the filter blocked, so the parent can decide whether to approve them.
 app.get('/api/admin/blocked', requireRole('parent'), (req, res) => res.json(store.getBlocked()));
 
-app.post('/api/admin/contacts', requireRole('parent'), (req, res) => {
+// Ask WhatsApp for the contact's hidden LID so messages addressed that way still match.
+async function lookupLid(jid) {
+  if (wa.state !== 'open' || !jid.endsWith('@s.whatsapp.net')) return { known: false };
+  try {
+    const [r] = (await wa.sock.onWhatsApp(jid)) || [];
+    return { known: true, exists: !!r?.exists, lid: r?.lid || null };
+  } catch (e) {
+    diag(`בדיקת מספר נכשלה: ${e.message}`);
+    return { known: false };
+  }
+}
+
+app.post('/api/admin/contacts', requireRole('parent'), async (req, res) => {
   const { phone, name } = req.body || {};
-  const jid = phoneToJid(phone);
+  // Approving straight from the blocked list passes the exact WhatsApp id.
+  const direct = req.body?.jid;
+  const jid = direct && /@(s\.whatsapp\.net|lid)$/.test(direct) ? direct : phoneToJid(phone);
   if (!jid) return res.status(400).json({ error: 'מספר טלפון לא תקין' });
+  const info = await lookupLid(jid);
+  const label = (name || '').trim() || phone || jid.split('@')[0];
   store.updateConfig((c) => {
     c.allowedContacts = c.allowedContacts.filter((x) => x.jid !== jid);
-    c.allowedContacts.push({ jid, name: (name || '').trim() || phone });
+    c.allowedContacts.push({ jid, name: label, ...(jid.endsWith('@lid') ? { lid: jid } : info.lid ? { lid: info.lid } : {}) });
   });
   store.removeBlocked(jid);
+  if (info.lid) store.removeBlocked(info.lid);
+  diag(`איש קשר נוסף: ${label} (${jid.split('@')[0]})` + (info.lid ? ' · מזהה פנימי נשמר' : ''));
   broadcastChats();
-  res.json({ ok: true });
+  res.json({ ok: true, warning: info.known && !info.exists ? 'שים לב: נראה שהמספר הזה לא רשום בוואטסאפ' : null });
+});
+
+app.get('/api/admin/diag', requireRole('parent'), (req, res) => {
+  const cfg = store.getConfig();
+  res.json({
+    connection: wa.state,
+    subscriptions: (cfg.pushSubscriptions || []).length,
+    contacts: cfg.allowedContacts.map((c) => ({ name: c.name, jid: c.jid, hasLid: !!c.lid })),
+    log: diagLog.slice().reverse(),
+  });
 });
 
 app.delete('/api/admin/contacts/:jid', requireRole('parent'), (req, res) => {
@@ -198,6 +234,7 @@ app.get('/api/push/key', requireRole('child'), (req, res) => res.json({ key: sto
 
 app.post('/api/push/subscribe', requireRole('child'), (req, res) => {
   const sub = req.body;
+  diag('הטלפון של הילד אישר קבלת התראות');
   if (!sub?.endpoint || !sub?.keys?.p256dh || !sub?.keys?.auth) return res.status(400).json({ error: 'bad subscription' });
   store.addSubscription({ endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } });
   res.json({ ok: true });
@@ -218,11 +255,15 @@ function notifyChild(jid, m) {
     body: isGroup && m.senderName ? `${m.senderName}: ${body}` : body,
     jid,
   });
-  for (const sub of cfg.pushSubscriptions || []) {
-    webpush.sendNotification(sub, payload, { TTL: 60 * 60 * 24, urgency: 'high' }).catch((err) => {
-      if (err.statusCode === 404 || err.statusCode === 410) store.removeSubscription(sub.endpoint);
-      else logger.warn({ err: err.message }, 'push failed');
-    });
+  const subs = cfg.pushSubscriptions || [];
+  if (!subs.length) diag('לא נשלחה התראה: אין מכשיר שאישר קבלת התראות');
+  for (const sub of subs) {
+    webpush.sendNotification(sub, payload, { TTL: 60 * 60 * 24, urgency: 'high' })
+      .then(() => diag('התראה נשלחה לטלפון'))
+      .catch((err) => {
+        if (err.statusCode === 404 || err.statusCode === 410) store.removeSubscription(sub.endpoint);
+        diag(`שליחת התראה נכשלה (${err.statusCode || err.message})`);
+      });
   }
 }
 
@@ -307,10 +348,13 @@ async function connectWhatsApp() {
       wa.qr = null;
       wa.state = 'open';
       console.log('[whatsapp] connected as', sock.user?.id);
+      diag('מחובר לוואטסאפ');
+      backfillLids();
     }
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode;
       wa.state = 'closed';
+      diag(`החיבור לוואטסאפ נסגר (קוד ${code ?? '?'}), מתחבר מחדש`);
       if (code === DisconnectReason.loggedOut) {
         console.log('[whatsapp] logged out - clearing session, a new QR will be generated');
         fs.rmSync(AUTH_DIR, { recursive: true, force: true });
@@ -326,18 +370,25 @@ async function connectWhatsApp() {
     const cfg = store.getConfig();
     let changed = false;
     for (const msg of messages) {
-      // Newer WhatsApp versions may address 1:1 chats by a hidden "LID" instead of the phone
-      // number; map it back to the phone number so the allowlist still matches.
-      let remote = msg.key.remoteJid || '';
-      if (remote.endsWith('@lid')) remote = msg.key.senderPn || msg.key.remoteJidAlt || remote;
-      const jid = jidNormalizedUser(remote);
+      const jid = jidNormalizedUser(resolveChatJid(msg.key, cfg));
       if (!jid || jid === 'status@broadcast' || !msg.message) continue;
+      // Learn the hidden LID of approved contacts whenever WhatsApp tells us both ids.
+      const lid = msg.key.remoteJid?.endsWith('@lid') ? msg.key.remoteJid : msg.key.senderLid;
+      if (lid && jid.endsWith('@s.whatsapp.net')) {
+        const c = cfg.allowedContacts.find((x) => x.jid === jid);
+        if (c && c.lid !== lid) store.updateConfig(() => { c.lid = lid; });
+      }
 
+      const who = `${msg.pushName || ''} (${jid.split('@')[0]}${jid.endsWith('@lid') ? ', מזהה פנימי' : ''})`;
       if (!isAllowed(jid, cfg)) {
         // Not approved: never shown to the child. Remember it for the parent.
-        if (!msg.key.fromMe) store.addBlocked(jid, msg.pushName || '');
+        if (!msg.key.fromMe) {
+          store.addBlocked(jid, msg.pushName || '');
+          if (type === 'notify') diag(`נחסמה הודעה מ-${who}`);
+        }
         continue;
       }
+      if (type === 'notify') diag(`${msg.key.fromMe ? 'נשלחה הודעה אל' : 'התקבלה הודעה מ'}-${who}`);
       const m = describeMessage(msg);
       if (!m) continue;
       store.addMessage(jid, m, msg);
@@ -347,6 +398,15 @@ async function connectWhatsApp() {
     }
     if (changed) broadcastChats();
   });
+}
+
+// Contacts approved before LID support (or while offline) get their LID looked up once connected.
+async function backfillLids() {
+  for (const c of store.getConfig().allowedContacts.filter((x) => !x.lid && x.jid.endsWith('@s.whatsapp.net'))) {
+    const info = await lookupLid(c.jid);
+    if (info.lid) store.updateConfig(() => { c.lid = info.lid; });
+    if (info.known && !info.exists) diag(`המספר של ${c.name} לא נמצא בוואטסאפ`);
+  }
 }
 
 connectWhatsApp().catch((e) => console.error('[whatsapp] failed to start', e));

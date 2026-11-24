@@ -34,3 +34,18 @@ test('describeMessage handles text and images', () => {
   assert.strictEqual(img.type, 'image');
   assert.strictEqual(describeMessage({ ...base, message: { reactionMessage: {} } }), null);
 });
+
+test('LID chats map back to approved phone numbers', () => {
+  const { resolveChatJid } = require('../lib/filter');
+  const c = { allowedContacts: [{ jid: '972541234567@s.whatsapp.net', lid: '111222@lid' }], allowedGroups: [] };
+  // WhatsApp sent the phone number alongside the LID
+  assert.strictEqual(resolveChatJid({ remoteJid: '999@lid', senderPn: '972541234567@s.whatsapp.net' }, c), '972541234567@s.whatsapp.net');
+  // Only the LID, but we learned it earlier
+  assert.strictEqual(resolveChatJid({ remoteJid: '111222@lid' }, c), '972541234567@s.whatsapp.net');
+  // Unknown LID stays as-is and is blocked
+  assert.strictEqual(resolveChatJid({ remoteJid: '555@lid' }, c), '555@lid');
+  assert.ok(!isAllowed('555@lid', c));
+  assert.ok(isAllowed('111222@lid', c));
+  // Normal phone-number chats are untouched
+  assert.strictEqual(resolveChatJid({ remoteJid: '972541234567@s.whatsapp.net' }, c), '972541234567@s.whatsapp.net');
+});
