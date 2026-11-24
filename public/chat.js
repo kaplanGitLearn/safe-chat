@@ -102,6 +102,8 @@ function showPane(name) {
 }
 
 function closeChat() {
+  stopRecording(false);
+  playingAudio?.pause();
   current = null;
   clearSelection(true);
   setReply(null);
@@ -248,8 +250,13 @@ function buildBubble(m, first) {
     if (m.type === 'call') {
       body.push(el('span', { class: 'call-line' }, svgEl(CALL_SVG), m.text));
     } else {
+      const src = `/api/media/${enc(current.jid)}/${enc(m.id)}`;
       if (m.type === 'image' || m.type === 'sticker') {
-        body.push(el('img', { src: `/api/media/${enc(current.jid)}/${enc(m.id)}`, alt: '', loading: 'lazy' }));
+        body.push(el('img', { src, alt: '', loading: 'lazy' }));
+      } else if (m.type === 'audio') {
+        body.push(buildAudio(src, m));
+      } else if (m.type === 'video') {
+        body.push(el('video', { src, controls: '', preload: 'metadata', playsinline: '' }));
       } else if (m.type !== 'text') {
         body.push(el('div', { class: 'media-label' }, MEDIA_LABELS[m.type] || m.type));
       }
@@ -524,6 +531,7 @@ $('composer').addEventListener('submit', async (e) => {
   if (!text || !current) return;
   const reply = replyTo;
   $('msgInput').value = '';
+  updateComposerButtons();
   setReply(null);
   $('msgInput').focus();
   try {
@@ -531,9 +539,168 @@ $('composer').addEventListener('submit', async (e) => {
   } catch (err) {
     alert('ההודעה לא נשלחה: ' + err.message);
     $('msgInput').value = text;
+    updateComposerButtons();
     setReply(reply);
   }
 });
+
+// ---------- Voice message player ----------
+const PLAY_SVG = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
+const PAUSE_SVG = '<svg viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>';
+const MIC_SVG = '<svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg>';
+const fmtDur = (sec) => { sec = Math.max(0, Math.round(sec || 0)); return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`; };
+let playingAudio = null;
+
+function buildAudio(src, m) {
+  const audio = new Audio();
+  audio.preload = 'none';
+  const btn = el('button', { type: 'button', class: 'play-btn', 'aria-label': 'ניגון' });
+  btn.innerHTML = PLAY_SVG;
+  const bar = el('input', { type: 'range', min: '0', max: '1000', value: '0', class: 'audio-bar', 'aria-label': 'מיקום' });
+  const time = el('span', { class: 'audio-time' }, fmtDur(m.seconds));
+  const icon = svgEl(MIC_SVG);
+  const wrap = el('div', { class: 'audio' + (m.ptt ? ' ptt' : '') }, btn, el('div', { class: 'audio-track' }, bar, time), m.ptt ? el('span', { class: 'audio-mic' }, icon) : null);
+  const dur = () => (Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : m.seconds || 0);
+  btn.addEventListener('click', (e) => {
+    if (selected.size) return; // tapping while selecting toggles the selection instead
+    e.stopPropagation();
+    if (!audio.src) audio.src = src;
+    if (audio.paused) {
+      if (playingAudio && playingAudio !== audio) playingAudio.pause();
+      playingAudio = audio;
+      audio.play().catch(() => toast('לא ניתן לנגן את ההודעה'));
+    } else audio.pause();
+  });
+  audio.addEventListener('play', () => { btn.innerHTML = PAUSE_SVG; });
+  audio.addEventListener('pause', () => { btn.innerHTML = PLAY_SVG; });
+  audio.addEventListener('ended', () => { btn.innerHTML = PLAY_SVG; bar.value = 0; time.textContent = fmtDur(dur()); });
+  audio.addEventListener('timeupdate', () => {
+    const d = dur();
+    if (d) bar.value = String(Math.round((audio.currentTime / d) * 1000));
+    time.textContent = fmtDur(audio.currentTime || d);
+  });
+  bar.addEventListener('pointerdown', (e) => e.stopPropagation()); // don't start a long press while scrubbing
+  bar.addEventListener('input', () => {
+    if (!audio.src) audio.src = src;
+    const d = dur();
+    if (d) audio.currentTime = (Number(bar.value) / 1000) * d;
+  });
+  return wrap;
+}
+
+// ---------- Composer: send button vs. microphone ----------
+function updateComposerButtons() {
+  const hasText = $('msgInput').value.trim().length > 0;
+  $('sendBtn').classList.toggle('hidden', !hasText);
+  $('micBtn').classList.toggle('hidden', hasText);
+}
+$('msgInput').addEventListener('input', updateComposerButtons);
+
+async function uploadMedia(kind, blob, extra = {}) {
+  const jid = current.jid;
+  const params = new URLSearchParams({ kind, ...extra });
+  if (replyTo) params.set('replyTo', replyTo.id);
+  setReply(null);
+  toast(kind === 'voice' ? 'שולח הודעה קולית…' : 'שולח תמונה…');
+  const res = await fetch(`/api/chats/${enc(jid)}/media?${params}`, { method: 'POST', headers: { 'Content-Type': blob.type || 'application/octet-stream' }, body: blob });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+}
+
+// ---------- Photos ----------
+$('attachBtn').onclick = () => $('fileInput').click();
+
+// Shrink big camera photos before sending (faster, and WhatsApp compresses them anyway).
+async function prepareImage(file) {
+  const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(bmp.width * scale);
+  canvas.height = Math.round(bmp.height * scale);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+}
+
+$('fileInput').addEventListener('change', async () => {
+  const file = $('fileInput').files[0];
+  $('fileInput').value = '';
+  if (!file || !current) return;
+  let blob;
+  try { blob = await prepareImage(file); } catch (_) { return toast('לא ניתן לפתוח את התמונה'); }
+  const url = URL.createObjectURL(blob);
+  const caption = el('input', { placeholder: 'הוספת כיתוב…', dir: 'auto', class: 'caption-input' });
+  const body = el('div', { class: 'image-preview' }, el('img', { src: url, alt: '' }), caption);
+  const send = async () => {
+    closeModal();
+    URL.revokeObjectURL(url);
+    try { await uploadMedia('image', blob, { caption: caption.value.trim() }); }
+    catch (err) { alert('התמונה לא נשלחה: ' + err.message); }
+  };
+  caption.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); send(); } });
+  openModal('שליחת תמונה אל ' + current.name, body, [
+    { text: 'ביטול', onclick: () => { closeModal(); URL.revokeObjectURL(url); } },
+    { text: 'שליחה', onclick: send },
+  ]);
+});
+
+// ---------- Voice messages ----------
+const MAX_RECORDING_SEC = 300;
+let rec = null; // { recorder, stream, chunks, started, timer, send }
+
+async function startRecording() {
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return toast('המכשיר לא תומך בהקלטה');
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  } catch (_) {
+    return alert('אין הרשאה למיקרופון. צריך לאשר גישה למיקרופון בהגדרות של Chrome.');
+  }
+  const type = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm'].find((t) => MediaRecorder.isTypeSupported(t));
+  const recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+  rec = { recorder, stream, chunks: [], started: Date.now(), send: false, jid: current.jid };
+  recorder.ondataavailable = (e) => { if (e.data.size) rec.chunks.push(e.data); };
+  recorder.onstop = async () => {
+    const r = rec;
+    rec = null;
+    clearInterval(r.timer);
+    r.stream.getTracks().forEach((t) => t.stop());
+    showRecorder(false);
+    const seconds = (Date.now() - r.started) / 1000;
+    if (!r.send) return;
+    if (seconds < 1) return toast('ההקלטה קצרה מדי');
+    const blob = new Blob(r.chunks, { type: recorder.mimeType || 'audio/webm' });
+    if (current?.jid !== r.jid) return;
+    try { await uploadMedia('voice', blob, { seconds: String(Math.round(seconds)) }); }
+    catch (err) { alert('ההודעה הקולית לא נשלחה: ' + err.message); }
+  };
+  recorder.start(250);
+  showRecorder(true);
+  navigator.vibrate?.(30);
+  $('recTime').textContent = '0:00';
+  rec.timer = setInterval(() => {
+    const sec = (Date.now() - rec.started) / 1000;
+    $('recTime').textContent = fmtDur(sec);
+    if (sec >= MAX_RECORDING_SEC) stopRecording(true);
+  }, 250);
+}
+
+function stopRecording(send) {
+  if (!rec) return;
+  rec.send = send;
+  if (rec.recorder.state !== 'inactive') rec.recorder.stop();
+}
+
+function showRecorder(on) {
+  $('composer').classList.toggle('hidden', on);
+  $('recorder').classList.toggle('hidden', !on);
+}
+
+$('micBtn').onclick = startRecording;
+$('recSend').onclick = () => stopRecording(true);
+$('recCancel').onclick = () => stopRecording(false);
 
 // ---------- Notifications ----------
 function urlBase64ToUint8Array(base64) {

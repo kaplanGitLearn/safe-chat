@@ -22,6 +22,7 @@ const {
 
 const webpush = require('web-push');
 const store = require('./lib/store');
+const media = require('./lib/media');
 const { isAllowed, resolveChatJid, phoneToJid, describeMessage, unwrap } = require('./lib/filter');
 
 const PORT = process.env.PORT || 3000;
@@ -30,6 +31,7 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const AUTH_DIR = path.join(DATA_DIR, 'auth');
 fs.mkdirSync(AUTH_DIR, { recursive: true });
 store.init(DATA_DIR);
+media.init(DATA_DIR);
 
 const { vapid } = store.getConfig();
 webpush.setVapidDetails('mailto:safechat@localhost', vapid.publicKey, vapid.privateKey);
@@ -442,21 +444,73 @@ if (FAKE_WA) {
 }
 
 // Media is only served for messages in allowed chats.
+// Sends a buffer, honouring Range requests so audio/video can be played and scrubbed.
+function sendBuffer(req, res, buf, mime) {
+  res.set({ 'Content-Type': mime, 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=86400' });
+  const m = /bytes=(\d*)-(\d*)/.exec(req.headers.range || '');
+  if (!m) return res.send(buf);
+  const start = m[1] ? Number(m[1]) : Math.max(0, buf.length - Number(m[2]));
+  const end = m[1] && m[2] ? Math.min(Number(m[2]), buf.length - 1) : buf.length - 1;
+  if (start >= buf.length || start > end) return res.status(416).set('Content-Range', `bytes */${buf.length}`).end();
+  res.status(206).set('Content-Range', `bytes ${start}-${end}/${buf.length}`).send(buf.subarray(start, end + 1));
+}
+
+// Media is only served for messages in allowed chats. Downloads are cached on disk.
 app.get('/api/media/:jid/:id', requireRole('child'), async (req, res) => {
   const { jid, id } = req.params;
-  if (!isAllowed(jid, store.getConfig())) return res.status(403).end();
+  if (!isAllowed(jid, store.getConfig()) || !store.getMessage(jid, id)) return res.status(403).end();
+  const cached = media.cacheGet(id);
+  if (cached) return sendBuffer(req, res, cached.buffer, cached.mime);
   const raw = store.getRaw(jid, id);
   if (!raw) return res.status(404).end();
   try {
     const buf = await downloadMediaMessage(raw, 'buffer', {}, { logger, reuploadRequest: wa.sock.updateMediaMessage });
-    const m = raw.message;
-    const mime = (m.imageMessage || m.stickerMessage || m.videoMessage || m.audioMessage)?.mimetype || 'application/octet-stream';
-    res.set('Content-Type', mime).send(buf);
+    const m = unwrap(raw.message) || {};
+    const mime = ((m.imageMessage || m.stickerMessage || m.videoMessage || m.audioMessage || m.documentMessage)?.mimetype || 'application/octet-stream').split(';')[0];
+    media.cachePut(id, buf, mime);
+    sendBuffer(req, res, buf, mime);
   } catch (e) {
+    diag(`הורדת מדיה נכשלה: ${e.message}`);
     res.status(500).end();
   }
 });
 
+// The child sends a photo or a voice message. The file is the request body; details are in the query.
+const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+app.post('/api/chats/:jid/media', requireRole('child'), express.raw({ type: () => true, limit: '16mb' }), async (req, res) => {
+  const jid = allowedChat(req, res);
+  if (!jid) return;
+  const kind = req.query.kind;
+  const buf = req.body;
+  if (!Buffer.isBuffer(buf) || !buf.length) return res.status(400).json({ error: 'empty' });
+  if (!requireConnection(res, kind === 'voice' ? 'לשלוח הודעה קולית' : 'לשלוח תמונה')) return;
+  const replyTo = req.query.replyTo && store.getMessage(jid, String(req.query.replyTo));
+  const options = replyTo ? { quoted: rawFor(jid, replyTo) } : {};
+  try {
+    let content, cache;
+    if (kind === 'image') {
+      const mime = String(req.headers['content-type'] || '').split(';')[0];
+      if (!IMAGE_TYPES.includes(mime)) return res.status(400).json({ error: 'סוג קובץ לא נתמך' });
+      content = { image: buf, mimetype: mime, caption: String(req.query.caption || '').slice(0, 1000) || undefined };
+      cache = { buffer: buf, mime };
+    } else if (kind === 'voice') {
+      const { ogg, waveform } = await media.convertVoice(buf);
+      const seconds = Math.max(1, Math.min(3600, Math.round(Number(req.query.seconds) || 1)));
+      content = { audio: ogg, mimetype: 'audio/ogg; codecs=opus', ptt: true, seconds, ...(waveform ? { waveform } : {}) };
+      cache = { buffer: ogg, mime: 'audio/ogg' };
+    } else {
+      return res.status(400).json({ error: 'kind' });
+    }
+    const sent = await wa.sock.sendMessage(jid, content, options);
+    if (sent?.key?.id) media.cachePut(sent.key.id, cache.buffer, cache.mime);
+    recordSent(jid, sent);
+    diag(`הילד שלח ${kind === 'voice' ? 'הודעה קולית' : 'תמונה'} אל ${jid.split('@')[0]}`);
+    res.json({ ok: true });
+  } catch (e) {
+    diag(`שליחת ${kind === 'voice' ? 'הודעה קולית' : 'תמונה'} נכשלה: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
 // ---------- Socket.IO (live updates for the child UI) ----------
 io.engine.use(sessionMiddleware);
 io.on('connection', (socket) => {

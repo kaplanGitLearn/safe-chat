@@ -213,3 +213,31 @@ svg { fill: currentColor; }
 .starred-item .bubble.mine { background: var(--mine); }
 .starred-item .meta svg { width: 12px; height: 12px; color: var(--muted); }
 #starredView .empty { line-height: 1.8; }
+
+/* ---------- Photos & voice ---------- */
+.input-wrap { display: flex; align-items: center; }
+.input-wrap input { flex: 1; min-width: 0; }
+.icon-btn.in-input { color: var(--muted); width: 44px; height: 44px; margin-inline-end: 2px; flex-shrink: 0; }
+.icon-btn.in-input:active { background: var(--hover); }
+
+.recorder .rec-wrap { padding: 0 6px; gap: 8px; min-height: 48px; }
+.recorder .icon-btn { color: var(--muted); }
+.rec-dot { width: 10px; height: 10px; border-radius: 50%; background: #ea0038; animation: rec-blink 1s infinite; flex-shrink: 0; }
+@keyframes rec-blink { 50% { opacity: .2; } }
+.rec-time { font-variant-numeric: tabular-nums; font-size: 17px; direction: ltr; }
+.rec-hint { color: var(--muted); flex: 1; text-align: center; font-size: 14px; }
+
+.bubble video { max-width: 280px; max-height: 340px; border-radius: 6px; display: block; margin: -2px -5px 4px; background: #000; }
+.audio { display: flex; align-items: center; gap: 8px; min-width: 230px; padding: 2px 0 0; direction: ltr; }
+.play-btn { background: none; color: var(--muted); width: 36px; height: 36px; padding: 0; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0; }
+.play-btn svg { width: 30px; height: 30px; }
+.audio-track { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.audio-bar { width: 100%; padding: 0; border: 0; height: 18px; accent-color: #34b7f1; background: transparent; }
+.audio-time { font-size: 11px; color: var(--muted); }
+.audio-mic { width: 34px; height: 34px; border-radius: 50%; background: var(--avatar-bg); color: #fff; display: grid; place-items: center; flex-shrink: 0; }
+.audio-mic svg { width: 20px; height: 20px; }
+.bubble.mine .audio-mic { background: #00a884; }
+
+.image-preview { display: flex; flex-direction: column; gap: 10px; padding: 0 22px; }
+.image-preview img { max-width: 100%; max-height: 55vh; object-fit: contain; border-radius: 8px; background: #0001; align-self: center; }
+.caption-input { border-radius: 20px; }

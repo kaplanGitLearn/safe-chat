@@ -82,9 +82,23 @@
           <button class="icon-btn" id="replyCancel" aria-label="ביטול תגובה"><svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
         </div>
         <form id="composer" class="composer">
-          <div class="input-wrap"><input id="msgInput" placeholder="הודעה" autocomplete="off" dir="auto"></div>
-          <button type="submit" class="send-btn" aria-label="שליחה"><svg viewBox="0 0 24 24"><path d="M1.1 21.8 23 12 1.1 2.2 1 9.8l15.7 2.2L1 14.2z"/></svg></button>
+          <div class="input-wrap">
+            <input id="msgInput" placeholder="הודעה" autocomplete="off" dir="auto">
+            <button type="button" id="attachBtn" class="icon-btn in-input" aria-label="שליחת תמונה" title="שליחת תמונה"><svg viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z"/><path d="M9 2 7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15a5 5 0 1 1 0-10 5 5 0 0 1 0 10z"/></svg></button>
+          </div>
+          <button type="submit" id="sendBtn" class="send-btn hidden" aria-label="שליחה"><svg viewBox="0 0 24 24"><path d="M1.1 21.8 23 12 1.1 2.2 1 9.8l15.7 2.2L1 14.2z"/></svg></button>
+          <button type="button" id="micBtn" class="send-btn" aria-label="הקלטת הודעה קולית" title="הודעה קולית"><svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg></button>
         </form>
+        <div id="recorder" class="composer recorder hidden">
+          <div class="input-wrap rec-wrap">
+            <button type="button" id="recCancel" class="icon-btn" aria-label="ביטול הקלטה"><svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg></button>
+            <span class="rec-dot"></span>
+            <span id="recTime" class="rec-time">0:00</span>
+            <span class="rec-hint">מקליט…</span>
+          </div>
+          <button type="button" id="recSend" class="send-btn" aria-label="שליחת ההקלטה"><svg viewBox="0 0 24 24"><path d="M1.1 21.8 23 12 1.1 2.2 1 9.8l15.7 2.2L1 14.2z"/></svg></button>
+        </div>
+        <input type="file" id="fileInput" accept="image/*" hidden>
       </div>
     </main>
   </div>

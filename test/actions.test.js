@@ -76,3 +76,39 @@ test('child message actions', async () => {
     await call('POST','/api/dev/incoming',{jid:STRANGER,message:{reactionMessage:{key:{id:'x'},text:'👍'}}});
     void ('chats:',(await call('GET','/api/chats')).b.map(c=>c.name+':'+(c.lastMessage?.type||'-')).join(', '));
 });
+
+test('child sends a photo and a voice message', async () => {
+  const ffmpeg = require('ffmpeg-static');
+  const { execFileSync } = require('node:child_process');
+  const make = (args) => execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', ...args, 'pipe:1'], { maxBuffer: 1 << 24 });
+  // What Chrome's recorder produces (webm/opus), and a small JPEG photo.
+  const webm = make(['-f', 'lavfi', '-i', 'sine=frequency=440:duration=3', '-c:a', 'libopus', '-f', 'webm']);
+  const jpeg = make(['-f', 'lavfi', '-i', 'color=c=red:s=320x240', '-frames:v', '1', '-f', 'mjpeg']);
+  const MOM = '972541111111@s.whatsapp.net';
+  const STRANGER = '972549999999@s.whatsapp.net';
+  const up = (jid, query, type, body) => fetch(`${B}/api/chats/${encodeURIComponent(jid)}/media?${query}`, { method: 'POST', headers: { 'Content-Type': type, cookie }, body });
+
+  let r = await up(MOM, 'kind=image&caption=' + encodeURIComponent('תמונה מהטיול'), 'image/jpeg', jpeg);
+  assert.strictEqual(r.status, 200, 'photo upload');
+  r = await up(MOM, 'kind=voice&seconds=3', 'audio/webm;codecs=opus', webm);
+  assert.strictEqual(r.status, 200, 'voice upload: ' + (await r.text()));
+  assert.strictEqual((await up(STRANGER, 'kind=image', 'image/jpeg', jpeg)).status, 403, 'no sending to unapproved chats');
+  assert.strictEqual((await up(MOM, 'kind=image', 'text/html', Buffer.from('<b>x</b>'))).status, 400, 'only real image types');
+
+  await new Promise((res) => setTimeout(res, 200));
+  const msgs = await (await fetch(`${B}/api/chats/${encodeURIComponent(MOM)}/messages`, { headers: { cookie } })).json();
+  const photo = msgs.find((m) => m.type === 'image' && m.fromMe);
+  const voice = msgs.find((m) => m.type === 'audio' && m.fromMe);
+  assert.ok(photo && photo.text === 'תמונה מהטיול', 'photo stored with caption');
+  assert.ok(voice && voice.ptt && voice.seconds === 3, 'voice note stored with length');
+  assert.strictEqual(msgs.filter((m) => m.type === 'audio').length, 1, 'voice note not duplicated');
+
+  const img = await fetch(`${B}/api/media/${encodeURIComponent(MOM)}/${photo.id}`, { headers: { cookie } });
+  assert.strictEqual(img.headers.get('content-type'), 'image/jpeg');
+  const ogg = Buffer.from(await (await fetch(`${B}/api/media/${encodeURIComponent(MOM)}/${voice.id}`, { headers: { cookie } })).arrayBuffer());
+  assert.strictEqual(ogg.subarray(0, 4).toString(), 'OggS', 'voice converted to ogg for WhatsApp');
+  const part = await fetch(`${B}/api/media/${encodeURIComponent(MOM)}/${voice.id}`, { headers: { cookie, range: 'bytes=0-99' } });
+  assert.strictEqual(part.status, 206, 'range requests for the audio player');
+  assert.strictEqual((await part.arrayBuffer()).byteLength, 100);
+});
+
