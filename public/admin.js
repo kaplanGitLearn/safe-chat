@@ -37,10 +37,21 @@ async function refreshConfig() {
   const list = (items, type) => items.length
     ? items.map((x) => el('div', { class: 'list-item' },
         el('div', {}, x.name, el('small', {}, x.jid.split('@')[0])),
-        el('button', { class: 'danger', onclick: () => removeItem(type, x.jid) }, 'הסרה')))
+        el('div', { class: 'row' },
+          el('button', { class: 'secondary', onclick: () => renameItem(type, x) }, 'עריכת שם'),
+          el('button', { class: 'danger', onclick: () => removeItem(type, x.jid) }, 'הסרה'))))
     : [el('p', { class: 'hint' }, 'אין עדיין')];
   $('contacts').replaceChildren(...list(config.allowedContacts, 'contacts'));
   $('groups').replaceChildren(...list(config.allowedGroups, 'groups'));
+}
+
+async function renameItem(type, item) {
+  const name = prompt('השם שהילד יראה:', item.name);
+  if (name === null || !name.trim() || name.trim() === item.name) return;
+  try {
+    await api(`/api/admin/${type}/${encodeURIComponent(item.jid)}`, { method: 'PATCH', body: { name: name.trim() } });
+    refreshConfig();
+  } catch (err) { alert(err.message); }
 }
 
 async function removeItem(type, jid) {

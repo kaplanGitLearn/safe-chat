@@ -112,3 +112,16 @@ test('child sends a photo and a voice message', async () => {
   assert.strictEqual((await part.arrayBuffer()).byteLength, 100);
 });
 
+test('parent can rename an approved contact', async () => {
+  let pc = '';
+  const login = await fetch(`${B}/api/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role: 'parent', password: 'parent123' }) });
+  pc = login.headers.get('set-cookie').split(';')[0];
+  const MOM = '972541111111@s.whatsapp.net';
+  const r = await fetch(`${B}/api/admin/contacts/${encodeURIComponent(MOM)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', cookie: pc }, body: JSON.stringify({ name: 'אמא ❤️' }) });
+  assert.strictEqual(r.status, 200);
+  const chats = await (await fetch(`${B}/api/chats`, { headers: { cookie } })).json();
+  assert.ok(chats.some((c) => c.jid === MOM && c.name === 'אמא ❤️'), 'child sees the new name');
+  const asChild = await fetch(`${B}/api/admin/contacts/${encodeURIComponent(MOM)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', cookie }, body: JSON.stringify({ name: 'x' }) });
+  assert.strictEqual(asChild.status, 401, 'child cannot rename');
+});
+

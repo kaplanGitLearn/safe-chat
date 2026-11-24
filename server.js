@@ -179,6 +179,19 @@ app.get('/api/admin/diag', requireRole('parent'), (req, res) => {
   });
 });
 
+// Rename an approved contact or group (the name the child sees in the chat list).
+const renameHandler = (key) => (req, res) => {
+  const name = String(req.body?.name || '').trim().slice(0, 60);
+  if (!name) return res.status(400).json({ error: 'השם ריק' });
+  const item = store.getConfig()[key].find((x) => x.jid === req.params.jid);
+  if (!item) return res.status(404).json({ error: 'לא נמצא' });
+  store.updateConfig(() => { item.name = name; });
+  broadcastChats();
+  res.json({ ok: true });
+};
+app.patch('/api/admin/contacts/:jid', requireRole('parent'), renameHandler('allowedContacts'));
+app.patch('/api/admin/groups/:jid', requireRole('parent'), renameHandler('allowedGroups'));
+
 app.delete('/api/admin/contacts/:jid', requireRole('parent'), (req, res) => {
   store.updateConfig((c) => { c.allowedContacts = c.allowedContacts.filter((x) => x.jid !== req.params.jid); });
   broadcastChats();
