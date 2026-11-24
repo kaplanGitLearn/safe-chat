@@ -22,9 +22,10 @@ const {
 
 const webpush = require('web-push');
 const store = require('./lib/store');
-const { isAllowed, resolveChatJid, phoneToJid, describeMessage } = require('./lib/filter');
+const { isAllowed, resolveChatJid, phoneToJid, describeMessage, unwrap } = require('./lib/filter');
 
 const PORT = process.env.PORT || 3000;
+const FAKE_WA = process.env.SAFECHAT_FAKE_WA === '1'; // development only: pretend WhatsApp
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const AUTH_DIR = path.join(DATA_DIR, 'auth');
 fs.mkdirSync(AUTH_DIR, { recursive: true });
@@ -277,22 +278,78 @@ app.get('/api/chats/:jid/messages', requireRole('child'), (req, res) => {
   res.json(store.getMessages(jid));
 });
 
-app.post('/api/chats/:jid/messages', requireRole('child'), async (req, res) => {
-  const { jid } = req.params;
-  const text = String(req.body?.text || '').trim();
-  if (!isAllowed(jid, store.getConfig())) return res.status(403).json({ error: 'forbidden' });
-  if (!text) return res.status(400).json({ error: 'empty' });
-  if (wa.state !== 'open') {
-    diag(`הילד ניסה לשלוח הודעה, אבל אין חיבור לוואטסאפ (מצב: ${wa.state})`);
-    return res.status(409).json({ error: 'אין חיבור לוואטסאפ כרגע' });
+function requireConnection(res, what) {
+  if (wa.state === 'open') return true;
+  diag(`הילד ניסה ${what}, אבל אין חיבור לוואטסאפ (מצב: ${wa.state})`);
+  res.status(409).json({ error: 'אין חיבור לוואטסאפ כרגע' });
+  return false;
+}
+
+// The original WhatsApp message for a stored one (rebuilt for text if the original wasn't kept).
+function rawFor(jid, m) {
+  return store.getRaw(jid, m.id) || {
+    key: { remoteJid: jid, id: m.id, fromMe: m.fromMe, ...(m.sender ? { participant: m.sender } : {}) },
+    message: { conversation: m.text || '' },
+    messageTimestamp: m.timestamp,
+  };
+}
+
+const keyFor = (jid, m) => ({ remoteJid: jid, id: m.id, fromMe: m.fromMe, ...(m.sender ? { participant: m.sender } : {}) });
+
+function emitUpdate(jid, m) {
+  io.to('child').emit('message-update', { jid, message: m });
+  broadcastChats();
+}
+
+function isMyJid(j) {
+  const u = wa.sock?.user;
+  if (!j || !u) return false;
+  const n = jidNormalizedUser(j);
+  return n === jidNormalizedUser(u.id) || (!!u.lid && n === jidNormalizedUser(u.lid));
+}
+
+function enrichQuoted(jid, m) {
+  if (!m?.quoted) return m;
+  const orig = store.getMessage(jid, m.quoted.id);
+  m.quoted.fromMe = orig ? orig.fromMe : isMyJid(m.quoted.sender) || (!m.quoted.sender && !m.fromMe);
+  if (orig?.senderName) m.quoted.senderName = orig.senderName;
+  return m;
+}
+
+// Store and show a message the child just sent, without waiting for WhatsApp's echo.
+function recordSent(jid, sent) {
+  const m = sent && enrichQuoted(jid, describeMessage(sent));
+  if (m && store.addMessage(jid, m, sent)) {
+    io.to('child').emit('message', { jid, message: m });
+    broadcastChats();
   }
+}
+
+// Every message action below checks that the chat is approved.
+function allowedChat(req, res) {
+  const { jid } = req.params;
+  if (!isAllowed(jid, store.getConfig())) { res.status(403).json({ error: 'forbidden' }); return null; }
+  return jid;
+}
+
+function storedMessage(req, res) {
+  const jid = allowedChat(req, res);
+  if (!jid) return null;
+  const m = store.getMessage(jid, req.params.id);
+  if (!m) { res.status(404).json({ error: 'not found' }); return null; }
+  return { jid, m };
+}
+
+app.post('/api/chats/:jid/messages', requireRole('child'), async (req, res) => {
+  const jid = allowedChat(req, res);
+  if (!jid) return;
+  const text = String(req.body?.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'empty' });
+  if (!requireConnection(res, 'לשלוח הודעה')) return;
+  const replyTo = req.body?.replyTo && store.getMessage(jid, req.body.replyTo);
   try {
-    const sent = await wa.sock.sendMessage(jid, { text });
-    const m = sent && describeMessage(sent);
-    if (m && store.addMessage(jid, m, sent)) {
-      io.to('child').emit('message', { jid, message: m });
-      broadcastChats();
-    }
+    const sent = await wa.sock.sendMessage(jid, { text }, replyTo ? { quoted: rawFor(jid, replyTo) } : {});
+    recordSent(jid, sent);
     diag(`הילד שלח הודעה אל ${jid.split('@')[0]}`);
     res.json({ ok: true });
   } catch (e) {
@@ -300,6 +357,89 @@ app.post('/api/chats/:jid/messages', requireRole('child'), async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+app.post('/api/chats/:jid/messages/:id/react', requireRole('child'), async (req, res) => {
+  const found = storedMessage(req, res);
+  if (!found) return;
+  const { jid, m } = found;
+  const emoji = String(req.body?.emoji || '');
+  if (!requireConnection(res, 'להגיב להודעה')) return;
+  try {
+    await wa.sock.sendMessage(jid, { react: { text: emoji, key: keyFor(jid, m) } });
+    applyReaction(jid, m.id, 'me', emoji);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Stars are private to SafeChat (they don't sync back to the phone).
+app.post('/api/chats/:jid/messages/:id/star', requireRole('child'), (req, res) => {
+  const found = storedMessage(req, res);
+  if (!found) return;
+  const m = store.updateMessage(found.jid, found.m.id, (x) => { x.starred = !!req.body?.starred; });
+  emitUpdate(found.jid, m);
+  res.json({ ok: true });
+});
+
+app.get('/api/starred', requireRole('child'), (req, res) => {
+  const cfg = store.getConfig();
+  res.json(store.getStarred().filter((s) => isAllowed(s.jid, cfg)));
+});
+
+// ?everyone=1 deletes for everyone (only the child's own messages); otherwise only from SafeChat.
+app.delete('/api/chats/:jid/messages/:id', requireRole('child'), async (req, res) => {
+  const found = storedMessage(req, res);
+  if (!found) return;
+  const { jid, m } = found;
+  if (req.query.everyone === '1') {
+    if (!m.fromMe) return res.status(403).json({ error: 'אפשר למחוק לכולם רק הודעות שלך' });
+    if (!requireConnection(res, 'למחוק הודעה')) return;
+    try {
+      await wa.sock.sendMessage(jid, { delete: keyFor(jid, m) });
+      markDeleted(jid, m.id);
+      diag(`הילד מחק לכולם הודעה בצ'אט ${jid.split('@')[0]}`);
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  } else {
+    store.removeMessage(jid, m.id);
+    io.to('child').emit('message-removed', { jid, id: m.id });
+    broadcastChats();
+  }
+  res.json({ ok: true });
+});
+
+// Forwarding only works into other approved chats.
+app.post('/api/chats/:jid/messages/:id/forward', requireRole('child'), async (req, res) => {
+  const found = storedMessage(req, res);
+  if (!found) return;
+  const { jid, m } = found;
+  const cfg = store.getConfig();
+  const targets = [].concat(req.body?.to || []).filter((t) => isAllowed(t, cfg));
+  if (!targets.length) return res.status(400).json({ error: 'לא נבחר צ\'אט' });
+  if (m.deleted) return res.status(400).json({ error: 'ההודעה נמחקה' });
+  if (!requireConnection(res, 'להעביר הודעה')) return;
+  try {
+    for (const to of targets) recordSent(to, await wa.sock.sendMessage(to, { forward: rawFor(jid, m) }));
+    diag(`הילד העביר הודעה ל-${targets.length} צ'אטים`);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Development only (SAFECHAT_FAKE_WA=1): simulate messages and calls arriving from other phones.
+if (FAKE_WA) {
+  app.post('/api/dev/incoming', (req, res) => {
+    const { jid, message, key, pushName, call } = req.body || {};
+    if (call) {
+      wa.sock.ev.emit('call', [{ id: 'C' + Date.now(), from: jid, status: 'offer', isVideo: !!call.video, date: new Date() }]);
+      return res.json({ ok: true });
+    }
+    res.json(wa.sock.incoming(jid, message, { key, pushName }));
+  });
+}
 
 // Media is only served for messages in allowed chats.
 app.get('/api/media/:jid/:id', requireRole('child'), async (req, res) => {
@@ -333,21 +473,51 @@ function broadcastChats() {
 // ---------- WhatsApp connection ----------
 const wa = { sock: null, state: 'connecting', qr: null };
 
+
 async function connectWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-  const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
-  const sock = makeWASocket({
+  const { version } = FAKE_WA ? {} : await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
+  const sock = FAKE_WA ? require('./lib/fake-wa').makeFakeSocket() : makeWASocket({
     version,
     auth: state,
     logger,
     browser: ['SafeChat', 'Chrome', '1.0'],
     markOnlineOnConnect: false,
+    // Lets WhatsApp re-send our messages if a recipient's phone couldn't decrypt them.
+    getMessage: async (key) => {
+      const jid = jidNormalizedUser(key.remoteJid || '');
+      return store.getRaw(jid, key.id)?.message || undefined;
+    },
     syncFullHistory: false,
   });
   wa.sock = sock;
   wa.state = 'connecting';
 
   sock.ev.on('creds.update', saveCreds);
+
+  // SafeChat can't take WhatsApp calls, so calls are declined (otherwise they would ring on the
+  // parent's phone). Calls from approved contacts show up in the chat as a missed call.
+  sock.ev.on('call', async (calls) => {
+    for (const call of calls) {
+      if (call.status !== 'offer') continue;
+      try { await sock.rejectCall(call.id, call.from); } catch (e) { logger.warn({ err: e.message }, 'reject call failed'); }
+      const cfg = store.getConfig();
+      let jid = jidNormalizedUser(call.isGroup && call.groupJid ? call.groupJid : (call.callerPn || call.from));
+      if (jid.endsWith('@lid')) jid = jidNormalizedUser(resolveChatJid({ remoteJid: jid }, cfg));
+      if (!isAllowed(jid, cfg)) { diag(`נדחתה שיחה ממספר לא מאושר (${jid.split('@')[0]})`); continue; }
+      const m = {
+        id: `call-${call.id}`, fromMe: false, sender: null, senderName: '', type: 'call',
+        text: call.isVideo ? 'שיחת וידאו שלא נענתה' : 'שיחה קולית שלא נענתה',
+        timestamp: Math.floor((call.date?.getTime?.() || Date.now()) / 1000),
+      };
+      if (store.addMessage(jid, m)) {
+        io.to('child').emit('message', { jid, message: m });
+        broadcastChats();
+        notifyChild(jid, { ...m, text: '📞 ' + m.text });
+        diag(`שיחה נכנסת מ-${jid.split('@')[0]} נדחתה והוצגה לילד כשיחה שלא נענתה`);
+      }
+    }
+  });
 
   sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
     if (qr) {
@@ -406,8 +576,9 @@ async function connectWhatsApp() {
         }
         continue;
       }
+      if (handleSpecialMessage(jid, msg)) continue;
       if (type === 'notify') diag(`${msg.key.fromMe ? 'נשלחה הודעה אל' : 'התקבלה הודעה מ'}-${who}`);
-      const m = describeMessage(msg);
+      const m = enrichQuoted(jid, describeMessage(msg));
       if (!m || !store.addMessage(jid, m, msg)) continue; // skip duplicates (e.g. our own sent messages)
       io.to('child').emit('message', { jid, message: m });
       if (!m.fromMe && type === 'notify') notifyChild(jid, m);
@@ -415,6 +586,48 @@ async function connectWhatsApp() {
     }
     if (changed) broadcastChats();
   });
+}
+
+function applyReaction(jid, id, who, emoji) {
+  const m = store.updateMessage(jid, id, (x) => {
+    x.reactions ||= {};
+    if (emoji) x.reactions[who] = emoji;
+    else delete x.reactions[who];
+  });
+  if (m) emitUpdate(jid, m);
+}
+
+function markDeleted(jid, id) {
+  const m = store.updateMessage(jid, id, (x) => {
+    x.deleted = true;
+    x.text = '';
+    delete x.quoted;
+    delete x.reactions;
+  });
+  if (m) emitUpdate(jid, m);
+}
+
+// Reactions, deletions and edits arrive as special messages that change an earlier one.
+function handleSpecialMessage(jid, msg) {
+  const body = unwrap(msg.message);
+  const who = msg.key.fromMe ? 'me' : (msg.key.participant || jid);
+  if (body?.reactionMessage) {
+    const r = body.reactionMessage;
+    if (r.key?.id) applyReaction(jid, r.key.id, who, r.text || '');
+    return true;
+  }
+  const p = body?.protocolMessage;
+  if (p?.key?.id && p.type === 0) { // REVOKE: "deleted for everyone"
+    markDeleted(jid, p.key.id);
+    return true;
+  }
+  if (p?.key?.id && p.type === 14 && p.editedMessage) { // MESSAGE_EDIT
+    const edited = describeMessage({ key: p.key, message: p.editedMessage, messageTimestamp: msg.messageTimestamp });
+    const m = edited && store.updateMessage(jid, p.key.id, (x) => { x.text = edited.text; x.edited = true; });
+    if (m) emitUpdate(jid, m);
+    return true;
+  }
+  return !!p; // other protocol messages are internal to WhatsApp
 }
 
 function rememberLid(lid, pn) {

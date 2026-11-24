@@ -26,9 +26,11 @@
     <aside class="sidebar">
       <div class="topbar">
         <h2>SafeChat</h2>
-        <button id="logoutBtn" class="icon-btn" title="יציאה" aria-label="יציאה">
-          <svg viewBox="0 0 24 24"><path d="M12 7a2 2 0 1 0-.001-4.001A2 2 0 0 0 12 7zm0 2a2 2 0 1 0 .001 4.001A2 2 0 0 0 12 9zm0 6a2 2 0 1 0 .001 4.001A2 2 0 0 0 12 15z"/></svg>
-        </button>
+        <button id="menuBtn" class="icon-btn" aria-label="תפריט"><svg viewBox="0 0 24 24"><path d="M12 7a2 2 0 1 0-.001-4.001A2 2 0 0 0 12 7zm0 2a2 2 0 1 0 .001 4.001A2 2 0 0 0 12 9zm0 6a2 2 0 1 0 .001 4.001A2 2 0 0 0 12 15z"/></svg></button>
+        <div id="mainMenu" class="menu hidden">
+          <button id="starredBtn">הודעות מסומנות בכוכב</button>
+          <button id="logoutBtn">יציאה</button>
+        </div>
       </div>
       <div id="notifBanner" class="notif-banner hidden">
         <div class="notif-icon"><svg viewBox="0 0 24 24"><path d="M12 22a2 2 0 0 0 2-2h-4a2 2 0 0 0 2 2zm6-6V11c0-3.07-1.64-5.64-4.5-6.32V4a1.5 1.5 0 0 0-3 0v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg></div>
@@ -36,30 +38,70 @@
       </div>
       <div id="chatList" class="chat-list"></div>
     </aside>
+
     <main class="conversation">
       <div id="placeholder" class="placeholder">
         <img src="icons/icon-192.png" alt="">
         <h3>SafeChat</h3>
         <p>בחר צ'אט כדי להתחיל</p>
       </div>
-      <div id="chatView" class="chat-view hidden">
+
+      <!-- Starred messages -->
+      <div id="starredView" class="chat-view hidden">
         <div class="topbar">
-          <button class="icon-btn back" id="backBtn" aria-label="חזרה">
-            <svg viewBox="0 0 24 24"><path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/></svg>
-          </button>
+          <button class="icon-btn back" id="starredBack" aria-label="חזרה"><svg viewBox="0 0 24 24"><path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/></svg></button>
+          <div class="title-wrap"><h2>הודעות מסומנות בכוכב</h2></div>
+        </div>
+        <div id="starredList" class="starred-list"></div>
+      </div>
+
+      <!-- Conversation -->
+      <div id="chatView" class="chat-view hidden">
+        <div class="topbar header-wrap">
+          <button class="icon-btn back" id="backBtn" aria-label="חזרה"><svg viewBox="0 0 24 24"><path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/></svg></button>
           <div class="avatar" id="chatAvatar"></div>
           <div class="title-wrap"><h2 id="chatTitle"></h2><small id="chatSubtitle"></small></div>
+          <a id="callBtn" class="icon-btn hidden" aria-label="התקשרות בטלפון" title="התקשרות בטלפון"><svg viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg></a>
+
+          <!-- Shown instead of the header while messages are selected -->
+          <div id="selBar" class="sel-bar hidden">
+            <button class="icon-btn" id="selClose" aria-label="ביטול בחירה"><svg viewBox="0 0 24 24"><path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/></svg></button>
+            <span id="selCount" class="sel-count"></span>
+            <button class="icon-btn" id="actReply" aria-label="תגובה" title="תגובה"><svg class="flip" viewBox="0 0 24 24"><path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/></svg></button>
+            <button class="icon-btn" id="actStar" aria-label="סימון בכוכב" title="סימון בכוכב"><svg viewBox="0 0 24 24"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg></button>
+            <button class="icon-btn" id="actDelete" aria-label="מחיקה" title="מחיקה"><svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg></button>
+            <button class="icon-btn" id="actCopy" aria-label="העתקה" title="העתקה"><svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg></button>
+            <button class="icon-btn" id="actForward" aria-label="העברה" title="העברה"><svg class="flip" viewBox="0 0 24 24"><path d="M14 9V5l7 7-7 7v-4.1c-5 0-8.5 1.6-11 5.1 1-5 4-10 11-11z"/></svg></button>
+          </div>
         </div>
+
         <div id="messages" class="messages"></div>
+
+        <div id="replyPreview" class="reply-preview hidden">
+          <div class="quote"><b id="replyName"></b><span id="replyText"></span></div>
+          <button class="icon-btn" id="replyCancel" aria-label="ביטול תגובה"><svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
+        </div>
         <form id="composer" class="composer">
           <div class="input-wrap"><input id="msgInput" placeholder="הודעה" autocomplete="off" dir="auto"></div>
-          <button type="submit" class="send-btn" aria-label="שליחה">
-            <svg viewBox="0 0 24 24"><path d="M1.1 21.8 23 12 1.1 2.2 1 9.8l15.7 2.2L1 14.2z"/></svg>
-          </button>
+          <button type="submit" class="send-btn" aria-label="שליחה"><svg viewBox="0 0 24 24"><path d="M1.1 21.8 23 12 1.1 2.2 1 9.8l15.7 2.2L1 14.2z"/></svg></button>
         </form>
       </div>
     </main>
   </div>
+
+  <!-- Emoji reactions for the selected message -->
+  <div id="reactBar" class="react-bar hidden"></div>
+
+  <!-- Dialogs (delete / forward) -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-box">
+      <h3 id="modalTitle"></h3>
+      <div id="modalBody" class="modal-body"></div>
+      <div id="modalButtons" class="modal-buttons"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="common.js"></script>
